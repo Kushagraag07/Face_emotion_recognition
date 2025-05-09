@@ -42,9 +42,10 @@ pipeline {
                         MAX_ATTEMPTS=10
                         WAIT_SECONDS=3
                         
-                        until curl -s --head http://localhost:${TEST_PORT} | grep -q "HTTP/" || [ $ATTEMPTS -ge $MAX_ATTEMPTS ]
+                        until curl -s --head http://localhost:8081 | grep -q "HTTP/" || [ $ATTEMPTS -ge $MAX_ATTEMPTS ]
                         do
-                            echo "Attempt $((++ATTEMPTS))/$MAX_ATTEMPTS: Waiting for application to start..."
+                            ATTEMPTS=$((ATTEMPTS + 1))
+                            echo "Attempt $ATTEMPTS/$MAX_ATTEMPTS: Waiting for application to start..."
                             sleep $WAIT_SECONDS
                         done
                         
@@ -93,9 +94,10 @@ pipeline {
                         MAX_ATTEMPTS=10
                         WAIT_SECONDS=3
                         
-                        until curl -s --head http://localhost:${HOST_PORT} | grep -q "HTTP/" || [ $ATTEMPTS -ge $MAX_ATTEMPTS ]
+                        until curl -s --head http://localhost:8500 | grep -q "HTTP/" || [ $ATTEMPTS -ge $MAX_ATTEMPTS ]
                         do
-                            echo "Attempt $((++ATTEMPTS))/$MAX_ATTEMPTS: Waiting for application to start..."
+                            ATTEMPTS=$((ATTEMPTS + 1))
+                            echo "Attempt $ATTEMPTS/$MAX_ATTEMPTS: Waiting for application to start..."
                             sleep $WAIT_SECONDS
                         done
                         
