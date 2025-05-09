@@ -27,9 +27,9 @@ pipeline {
             steps {
                 script {
                     // Simple test - check if the Docker container starts correctly
-                    sh "docker run -d --name test-container -p 8081:${CONTAINER_PORT} ${APP_NAME}:${IMAGE_TAG}"
+                    sh "docker run -d --name test-container -p 8500:${CONTAINER_PORT} ${APP_NAME}:${IMAGE_TAG}"
                     sh "sleep 5" // Give the container time to start
-                    sh "curl -s --head http://localhost:8081 | grep '200 OK' || exit 1"
+                    sh "curl -s --head http://localhost:8500 | grep '200 OK' || exit 1"
                     sh "docker stop test-container && docker rm test-container"
                 }
             }
