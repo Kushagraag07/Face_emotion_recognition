@@ -6,6 +6,7 @@ pipeline {
         IMAGE_TAG = "${env.BUILD_NUMBER}"
         CONTAINER_PORT = '80'
         HOST_PORT = '8500'
+        TEST_PORT = '8081'
     }
     
     stages {
@@ -26,10 +27,47 @@ pipeline {
         stage('Run Tests') {
             steps {
                 script {
-                    // Simple test - check if the Docker container starts correctly
-                    sh "docker run -d --name test-container -p 8500:${CONTAINER_PORT} ${APP_NAME}:${IMAGE_TAG}"
-                    sh "sleep 5" // Give the container time to start
-                    sh "curl -s --head http://localhost:8500 | grep '200 OK' || exit 1"
+                    // Clean up any existing test container
+                    sh "docker stop test-container || true"
+                    sh "docker rm test-container || true"
+                    
+                    // Run test container
+                    sh "docker run -d --name test-container -p ${TEST_PORT}:${CONTAINER_PORT} ${APP_NAME}:${IMAGE_TAG}"
+                    
+                    // Increase wait time and add more robust health checking
+                    sh "echo 'Waiting for application to start...'"
+                    sh '''
+                        # Wait up to 30 seconds for the application to respond
+                        ATTEMPTS=0
+                        MAX_ATTEMPTS=10
+                        WAIT_SECONDS=3
+                        
+                        until curl -s --head http://localhost:${TEST_PORT} | grep -q "HTTP/" || [ $ATTEMPTS -ge $MAX_ATTEMPTS ]
+                        do
+                            echo "Attempt $((++ATTEMPTS))/$MAX_ATTEMPTS: Waiting for application to start..."
+                            sleep $WAIT_SECONDS
+                        done
+                        
+                        if [ $ATTEMPTS -ge $MAX_ATTEMPTS ]; then
+                            echo "Application failed to start after $((MAX_ATTEMPTS * WAIT_SECONDS)) seconds"
+                            docker logs test-container
+                            exit 1
+                        fi
+                        
+                        # Check for actual status code
+                        STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${TEST_PORT})
+                        echo "Application responded with status code: $STATUS"
+                        
+                        if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 400 ]; then
+                            echo "Application is not healthy (Status: $STATUS)"
+                            docker logs test-container
+                            exit 1
+                        fi
+                        
+                        echo "Application is running and responding with status code $STATUS"
+                    '''
+                    
+                    // Clean up test container
                     sh "docker stop test-container && docker rm test-container"
                 }
             }
@@ -47,6 +85,28 @@ pipeline {
                     
                     // Tag as latest for easy reference
                     sh "docker tag ${APP_NAME}:${IMAGE_TAG} ${APP_NAME}:latest"
+                    
+                    // Verify deployment was successful
+                    sh '''
+                        # Wait up to 30 seconds for the application to respond
+                        ATTEMPTS=0
+                        MAX_ATTEMPTS=10
+                        WAIT_SECONDS=3
+                        
+                        until curl -s --head http://localhost:${HOST_PORT} | grep -q "HTTP/" || [ $ATTEMPTS -ge $MAX_ATTEMPTS ]
+                        do
+                            echo "Attempt $((++ATTEMPTS))/$MAX_ATTEMPTS: Waiting for application to start..."
+                            sleep $WAIT_SECONDS
+                        done
+                        
+                        if [ $ATTEMPTS -ge $MAX_ATTEMPTS ]; then
+                            echo "Deployed application failed to start after $((MAX_ATTEMPTS * WAIT_SECONDS)) seconds"
+                            docker logs ${APP_NAME}
+                            exit 1
+                        fi
+                        
+                        echo "Application is running at http://localhost:${HOST_PORT}"
+                    '''
                 }
             }
         }
@@ -58,6 +118,10 @@ pipeline {
         }
         failure {
             echo "Deployment failed!"
+            script {
+                // Output logs if available to help with debugging
+                sh "docker logs ${APP_NAME} || true"
+            }
         }
         always {
             // Clean up old Docker images to save space, keeping the currently running one
