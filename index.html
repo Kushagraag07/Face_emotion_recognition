@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Face Tracking with Emotion and Eye Gaze Detection</title>
+  <script src="./js/face-api.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background-color: #f0f0f0;
+      font-family: Arial, sans-serif;
+    }
+    
+    .container {
+      position: relative;
+      margin-top: 20px;
+    }
+    
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    
+    video {
+      border: 3px solid #4a90e2;
+      border-radius: 10px;
+    }
+    
+    #info {
+      margin-top: 10px;
+      padding: 15px;
+      background-color: white;
+      border-radius: 10px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      width: 640px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    
+    .status {
+      font-weight: bold;
+      color: #4a90e2;
+    }
+    
+    .emotion-bar {
+      height: 20px;
+      background-color: #e0e0e0;
+      border-radius: 10px;
+      margin-top: 5px;
+      overflow: hidden;
+      position: relative;
+    }
+    
+    .emotion-fill {
+      height: 100%;
+      position: absolute;
+      border-radius: 10px;
+      transition: width 0.3s ease;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    
+    h1 {
+      color: #4a90e2;
+      margin-bottom: 5px;
+    }
+    
+    .emotion-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 14px;
+    }
+    
+    .gaze-info {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 10px;
+      padding: 10px;
+      background-color: #f7f7f7;
+      border-radius: 5px;
+    }
+
+    #cameraButton {
+      padding: 10px 20px;
+      background-color: #4a90e2;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 16px;
+      margin-bottom: 10px;
+    }
+
+    #cameraButton:hover {
+      background-color: #3a80d2;
+    }
+    
+    #reportStatus {
+      color: #4CAF50;
+      font-size: 12px;
+      margin-top: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Face Tracking System</h1>
+    <p>Detecting facial expressions and eye gaze direction in real-time</p>
+  </div>
+  
+  <div class="container">
+    <video id="video" width="640" height="480" autoplay muted></video>
+    <canvas id="overlay" width="640" height="480"></canvas>
+  </div>
+  
+  <div id="info">
+    <div id="status" class="status">Click "Start Camera" to begin</div>
+    
+    <button id="cameraButton">Start Camera</button>
+    <span id="reportStatus"></span>
+    
+    <div>
+      <h3>Emotion Analysis</h3>
+      <div id="emotions"></div>
+    </div>
+    
+    <div>
+      <h3>Eye Gaze Direction</h3>
+      <div id="gaze" class="gaze-info">
+        <span>Looking: <span id="gazeDirection">Initializing...</span></span>
+        <span>Confidence: <span id="gazeConfidence">0%</span></span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const ctx = overlay.getContext('2d');
+    const statusElement = document.getElementById('status');
+    const emotionsElement = document.getElementById('emotions');
+    const gazeDirectionElement = document.getElementById('gazeDirection');
+    const gazeConfidenceElement = document.getElementById('gazeConfidence');
+    const cameraButton = document.getElementById('cameraButton');
+    const reportStatusElement = document.getElementById('reportStatus');
+    
+    let isModelLoaded = false;
+    let faceDetectionInterval = null;
+    let emotionReportInterval = null;
+    let emotionTrackingInterval = null;
+    let emotionReports = [];
+    
+    const emotionColors = {
+      'neutral': '#808080',
+      'happy': '#FFD700',
+      'sad': '#6495ED',
+      'angry': '#FF4500',
+      'fearful': '#9370DB',
+      'disgusted': '#32CD32',
+      'surprised': '#FF69B4'
+    };
+    
+    let currentEmotions = {};
+    
+    Object.keys(emotionColors).forEach(emotion => {
+      const emotionContainer = document.createElement('div');
+      emotionContainer.style.marginBottom = '5px';
+      
+      const emotionLabel = document.createElement('div');
+      emotionLabel.className = 'emotion-label';
+      
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = emotion.charAt(0).toUpperCase() + emotion.slice(1);
+      
+      const valueSpan = document.createElement('span');
+      valueSpan.id = `${emotion}-value`;
+      valueSpan.textContent = '0%';
+      
+      emotionLabel.appendChild(nameSpan);
+      emotionLabel.appendChild(valueSpan);
+      
+      const barContainer = document.createElement('div');
+      barContainer.className = 'emotion-bar';
+      
+      const barFill = document.createElement('div');
+      barFill.className = 'emotion-fill';
+      barFill.id = `${emotion}-bar`;
+      barFill.style.backgroundColor = emotionColors[emotion];
+      barFill.style.width = '0%';
+      
+      barContainer.appendChild(barFill);
+      emotionContainer.appendChild(emotionLabel);
+      emotionContainer.appendChild(barContainer);
+      
+      emotionsElement.appendChild(emotionContainer);
+    });
+    
+    async function loadModels() {
+      try {
+        statusElement.textContent = 'Loading models...';
+        
+        const modelUrl = './models';
+        
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri(modelUrl),
+          faceapi.nets.faceLandmark68Net.loadFromUri(modelUrl),
+          faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl),
+          faceapi.nets.faceExpressionNet.loadFromUri(modelUrl)
+        ]);
+        
+        statusElement.textContent = 'Models loaded! Click "Start Camera" to begin';
+        isModelLoaded = true;
+        cameraButton.disabled = false;
+      } catch (error) {
+        statusElement.textContent = `Error loading models: ${error.message}`;
+        console.error('Error loading models:', error);
+        cameraButton.textContent = 'Retry Loading Models';
+        cameraButton.disabled = false;
+      }
+    }
+    
+    function trackEmotionEverySecond() {
+      const timestamp = new Date().toISOString();
+      const emotionData = { ...currentEmotions, timestamp };
+      
+      console.log('Emotion tracked at second interval:', emotionData);
+      
+      reportStatusElement.textContent = `Emotion tracked at ${new Date().toLocaleTimeString()}`;
+      setTimeout(() => {
+        reportStatusElement.textContent = '';
+      }, 800);
+    }
+    
+    function generateEmotionReport() {
+      const timestamp = new Date().toISOString();
+      const emotionData = { ...currentEmotions, timestamp };
+      
+      emotionReports.push(emotionData);
+      console.log('Emotion Report Generated:', emotionData);
+      
+      reportStatusElement.textContent = `Report saved at ${new Date().toLocaleTimeString()}`;
+      setTimeout(() => {
+        reportStatusElement.textContent = '';
+      }, 3000);
+      
+      saveReportsToStorage();
+    }
+    
+    function saveReportsToStorage() {
+      try {
+        localStorage.setItem('emotionReports', JSON.stringify(emotionReports));
+      } catch (error) {
+        console.error('Error saving reports to localStorage:', error);
+      }
+    }
+    
+    function loadReportsFromStorage() {
+      try {
+        const savedReports = localStorage.getItem('emotionReports');
+        if (savedReports) {
+          emotionReports = JSON.parse(savedReports);
+          console.log(`Loaded ${emotionReports.length} previous reports`);
+        }
+      } catch (error) {
+        console.error('Error loading reports from localStorage:', error);
+      }
+    }
+    
+    function exportReports() {
+      const dataStr = JSON.stringify(emotionReports, null, 2);
+      const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+      
+      const exportFileDefaultName = `emotion-reports-${new Date().toISOString().slice(0,10)}.json`;
+      
+      const linkElement = document.createElement('a');
+      linkElement.setAttribute('href', dataUri);
+      linkElement.setAttribute('download', exportFileDefaultName);
+      linkElement.click();
+    }
+    
+    async function startVideo() {
+      try {
+        cameraButton.disabled = true;
+        statusElement.textContent = 'Requesting camera access...';
+        
+        const constraints = {
+          video: {
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            facingMode: 'user'
+          },
+          audio: false
+        };
+        
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        
+        video.onloadedmetadata = () => {
+          video.play();
+          statusElement.textContent = 'Face tracking active';
+          
+          if (faceDetectionInterval) {
+            clearInterval(faceDetectionInterval);
+          }
+          if (emotionTrackingInterval) {
+            clearInterval(emotionTrackingInterval);
+          }
+          if (emotionReportInterval) {
+            clearInterval(emotionReportInterval);
+          }
+          
+          faceDetectionInterval = setInterval(detectFaces, 100);
+          emotionTrackingInterval = setInterval(trackEmotionEverySecond, 1000);
+          emotionReportInterval = setInterval(generateEmotionReport, 30000);
+          
+          loadReportsFromStorage();
+          
+          cameraButton.textContent = 'Restart Camera';
+          cameraButton.disabled = false;
+        };
+      } catch (error) {
+        statusElement.textContent = `Error accessing camera: ${error.message}`;
+        console.error('Error accessing camera:', error);
+        cameraButton.textContent = 'Retry Camera Access';
+        cameraButton.disabled = false;
+      }
+    }
+    
+    function getEyeAspectRatio(eye) {
+      const height1 = distance(eye[1], eye[5]);
+      const height2 = distance(eye[2], eye[4]);
+      
+      const width = distance(eye[0], eye[3]);
+      
+      return (height1 + height2) / (2.0 * width);
+    }
+    
+    function getEyeCenter(eye) {
+      let x = 0, y = 0;
+      for (const point of eye) {
+        x += point.x;
+        y += point.y;
+      }
+      return { x: x / eye.length, y: y / eye.length };
+    }
+    
+    function distance(p1, p2) {
+      return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+    }
+    
+    function determineGazeDirection(landmarks) {
+      const leftEye = landmarks.getLeftEye();
+      const rightEye = landmarks.getRightEye();
+      
+      const leftEyeCenter = getEyeCenter(leftEye);
+      const rightEyeCenter = getEyeCenter(rightEye);
+      
+      const leftIrisY = (leftEye[1].y + leftEye[5].y) / 2;
+      const rightIrisY = (rightEye[1].y + rightEye[5].y) / 2;
+      
+      const leftEyeHeight = distance(leftEye[1], leftEye[5]);
+      const rightEyeHeight = distance(rightEye[1], rightEye[5]);
+      
+      const leftEyeTopRatio = (leftEyeCenter.y - leftIrisY) / leftEyeHeight;
+      const rightEyeTopRatio = (rightEyeCenter.y - rightIrisY) / rightEyeHeight;
+      
+      const leftEyeWidth = distance(leftEye[0], leftEye[3]);
+      const rightEyeWidth = distance(rightEye[0], rightEye[3]);
+      
+      const leftIrisX = (leftEye[0].x + leftEye[3].x) / 2;
+      const rightIrisX = (rightEye[0].x + rightEye[3].x) / 2;
+      
+      const leftEyeHorizontalRatio = (leftIrisX - leftEye[0].x) / leftEyeWidth;
+      const rightEyeHorizontalRatio = (rightIrisX - rightEye[0].x) / rightEyeWidth;
+      
+      const horizontalRatio = (leftEyeHorizontalRatio + rightEyeHorizontalRatio) / 2;
+      const verticalRatio = (leftEyeTopRatio + rightEyeTopRatio) / 2;
+      
+      let direction = "Center";
+      let confidence = 0;
+      
+      if (horizontalRatio < 0.4) {
+        direction = "Left";
+        confidence = Math.abs(0.5 - horizontalRatio) * 2;
+      } else if (horizontalRatio > 0.6) {
+        direction = "Right";
+        confidence = Math.abs(horizontalRatio - 0.5) * 2;
+      } else if (verticalRatio < 0.35) {
+        direction = "Up";
+        confidence = Math.abs(0.5 - verticalRatio) * 2;
+      } else if (verticalRatio > 0.65) {
+        direction = "Down";
+        confidence = Math.abs(verticalRatio - 0.5) * 2;
+      } else {
+        confidence = 1 - (Math.abs(horizontalRatio - 0.5) + Math.abs(verticalRatio - 0.5));
+      }
+      
+      confidence = Math.min(Math.max(confidence, 0), 1) * 100;
+      
+      return { direction, confidence: confidence.toFixed(0) };
+    }
+    
+    async function detectFaces() {
+      if (!video.srcObject || video.paused || video.ended) return;
+      
+      const detections = await faceapi.detectAllFaces(
+        video, 
+        new faceapi.TinyFaceDetectorOptions()
+      )
+      .withFaceLandmarks()
+      .withFaceExpressions();
+      
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+      
+      if (detections.length > 0) {
+        const detection = detections[0];
+        const { detection: faceBox, landmarks, expressions } = detection;
+        
+        ctx.strokeStyle = '#4a90e2';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(
+          faceBox.box.x, 
+          faceBox.box.y, 
+          faceBox.box.width, 
+          faceBox.box.height
+        );
+        
+        const leftEye = landmarks.getLeftEye();
+        const rightEye = landmarks.getRightEye();
+        
+        ctx.fillStyle = '#FF6347';
+        for (const point of [...leftEye, ...rightEye]) {
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, 2, 0, 2 * Math.PI);
+          ctx.fill();
+        }
+        
+        ctx.strokeStyle = '#32CD32';
+        ctx.lineWidth = 1;
+        
+        ctx.beginPath();
+        ctx.moveTo(leftEye[0].x, leftEye[0].y);
+        for (let i = 1; i < leftEye.length; i++) {
+          ctx.lineTo(leftEye[i].x, leftEye[i].y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+        
+        ctx.beginPath();
+        ctx.moveTo(rightEye[0].x, rightEye[0].y);
+        for (let i = 1; i < rightEye.length; i++) {
+          ctx.lineTo(rightEye[i].x, rightEye[i].y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+        
+        currentEmotions = {};
+        for (const [emotion, value] of Object.entries(expressions)) {
+          const percentage = (value * 100).toFixed(0);
+          const bar = document.getElementById(`${emotion}-bar`);
+          const valueElement = document.getElementById(`${emotion}-value`);
+          
+          currentEmotions[emotion] = parseFloat(percentage);
+          
+          if (bar && valueElement) {
+            bar.style.width = `${percentage}%`;
+            valueElement.textContent = `${percentage}%`;
+          }
+        }
+        
+        const gaze = determineGazeDirection(landmarks);
+        gazeDirectionElement.textContent = gaze.direction;
+        gazeConfidenceElement.textContent = `${gaze.confidence}%`;
+        
+        currentEmotions.gaze = {
+          direction: gaze.direction,
+          confidence: parseFloat(gaze.confidence)
+        };
+        
+        const mouth = landmarks.getMouth();
+        const mouthHeight = distance(mouth[13], mouth[19]);
+        const mouthWidth = distance(mouth[0], mouth[6]);
+        const mouthAspectRatio = mouthHeight / mouthWidth;
+        
+        currentEmotions.mouthAspectRatio = parseFloat(mouthAspectRatio.toFixed(2));
+        
+        ctx.strokeStyle = '#FFD700';
+        ctx.beginPath();
+        ctx.moveTo(mouth[0].x, mouth[0].y);
+        for (let i = 1; i < mouth.length; i++) {
+          ctx.lineTo(mouth[i].x, mouth[i].y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+        
+        const nose = landmarks.getNose();
+        ctx.strokeStyle = '#9370DB';
+        ctx.beginPath();
+        ctx.moveTo(nose[0].x, nose[0].y);
+        for (let i = 1; i < nose.length; i++) {
+          ctx.lineTo(nose[i].x, nose[i].y);
+        }
+        ctx.stroke();
+      } else {
+        currentEmotions = { noFaceDetected: true };
+        
+        Object.keys(emotionColors).forEach(emotion => {
+          const bar = document.getElementById(`${emotion}-bar`);
+          const valueElement = document.getElementById(`${emotion}-value`);
+          
+          if (bar && valueElement) {
+            bar.style.width = '0%';
+            valueElement.textContent = '0%';
+          }
+        });
+        
+        gazeDirectionElement.textContent = 'No face detected';
+        gazeConfidenceElement.textContent = '0%';
+      }
+    }
+    
+    cameraButton.addEventListener('click', () => {
+      if (!isModelLoaded) {
+        loadModels();
+      } else {
+        startVideo();
+      }
+    });
+    
+    document.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.key === 'e') {
+        e.preventDefault();
+        exportReports();
+      }
+    });
+    
+    window.addEventListener('load', loadModels);
+  </script>
+</body>
+</html>
