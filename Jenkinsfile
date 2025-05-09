@@ -31,21 +31,52 @@ pipeline {
                     sh "docker stop test-container || true"
                     sh "docker rm test-container || true"
                     
-                    // Run test container
+                    // Run test container with additional parameters
                     sh "docker run -d --name test-container -p ${TEST_PORT}:${CONTAINER_PORT} ${APP_NAME}:${IMAGE_TAG}"
                     
-                    // Increase wait time and add more robust health checking
+                    // Output container logs to help with debugging
+                    sh "sleep 5" // Give container a moment to start
+                    sh "docker logs test-container"
+                    
+                    // More robust health checking with longer timeout
                     sh "echo 'Waiting for application to start...'"
                     sh '''
-                        # Wait up to 30 seconds for the application to respond
+                        # Wait up to 60 seconds for the application to respond
                         ATTEMPTS=0
-                        MAX_ATTEMPTS=10
+                        MAX_ATTEMPTS=20
                         WAIT_SECONDS=3
                         
-                        until curl -s --head http://localhost:8081 | grep -q "HTTP/" || [ $ATTEMPTS -ge $MAX_ATTEMPTS ]
+                        # Check if container is still running
+                        until [ "$(docker inspect -f {{.State.Running}} test-container 2>/dev/null)" == "true" ] || [ $ATTEMPTS -ge 3 ]; do
+                            ATTEMPTS=$((ATTEMPTS + 1))
+                            echo "Container not running yet, waiting... ($ATTEMPTS/3)"
+                            sleep 2
+                        done
+                        
+                        if [ "$(docker inspect -f {{.State.Running}} test-container 2>/dev/null)" != "true" ]; then
+                            echo "Container failed to start or crashed immediately"
+                            docker logs test-container
+                            exit 1
+                        fi
+                        
+                        # Reset counter for application health check
+                        ATTEMPTS=0
+                        
+                        # Try connecting to different endpoints
+                        until curl -s --head http://localhost:${TEST_PORT} | grep -q "HTTP/" || \
+                            curl -s --head http://localhost:${TEST_PORT}/health | grep -q "HTTP/" || \
+                            curl -s --head http://localhost:${TEST_PORT}/index.html | grep -q "HTTP/" || \
+                            [ $ATTEMPTS -ge $MAX_ATTEMPTS ]
                         do
                             ATTEMPTS=$((ATTEMPTS + 1))
                             echo "Attempt $ATTEMPTS/$MAX_ATTEMPTS: Waiting for application to start..."
+                            
+                            # Show container logs on every few attempts
+                            if [ $((ATTEMPTS % 5)) -eq 0 ]; then
+                                echo "Container logs so far:"
+                                docker logs test-container --tail 20
+                            fi
+                            
                             sleep $WAIT_SECONDS
                         done
                         
@@ -56,6 +87,7 @@ pipeline {
                         fi
                         
                         # Check for actual status code
+                        echo "Testing endpoint: http://localhost:${TEST_PORT}"
                         STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${TEST_PORT})
                         echo "Application responded with status code: $STATUS"
                         
