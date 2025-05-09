@@ -47,7 +47,7 @@ pipeline {
                         WAIT_SECONDS=3
                         
                         # Check if container is still running
-                        until [ "$(docker inspect -f {{.State.Running}} test-container 2>/dev/null)" == "true" ] || [ $ATTEMPTS -ge 3 ]; do
+                        until [ "$(docker inspect -f {{.State.Running}} test-container 2>/dev/null)" = "true" ] || [ $ATTEMPTS -ge 3 ]; do
                             ATTEMPTS=$((ATTEMPTS + 1))
                             echo "Container not running yet, waiting... ($ATTEMPTS/3)"
                             sleep 2
